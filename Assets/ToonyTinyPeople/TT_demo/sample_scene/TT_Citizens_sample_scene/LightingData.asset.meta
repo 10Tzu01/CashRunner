@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 059be196c7eca7d4aa7db7127316da23
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 112000000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 113188
+  packageName: Toony Tiny People Demo
+  packageVersion: 1.1
+  assetPath: Assets/ToonyTinyPeople/TT_demo/sample_scene/TT_Citizens_sample_scene/LightingData.asset
+  uploadId: 981034

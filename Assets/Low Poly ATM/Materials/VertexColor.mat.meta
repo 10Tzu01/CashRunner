@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 0e2cb3963d63abd40a1fbdc606e9e193
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 2100000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 153420
+  packageName: Low Poly ATM
+  packageVersion: 1.0
+  assetPath: Assets/Low Poly ATM/Materials/VertexColor.mat
+  uploadId: 327910
