@@ -41,6 +41,16 @@ public class CopAIWithAnimation : MonoBehaviour
     public float turnSpeed = 360f;
     public float agentAcceleration = 20f;
 
+    [Header("Collision Avoidance")]
+    [Tooltip("Use NavMesh avoidance + slot spreading so cops don't pile onto the same spot.")]
+    public bool useAvoidance = true;
+    [Tooltip("Base avoidance priority (lower = more important). Each cop gets a slightly different value so one always yields to the other. Chasing cops get a boost.")]
+    [Range(0, 99)] public int basePriority = 50;
+    [Tooltip("How far apart cops stand when they share the same target spot. Should be at least 2x the NavMeshAgent radius.")]
+    public float spotSlotSpacing = 1.5f;
+    [Tooltip("Max distance an offset slot may be moved to land on the NavMesh.")]
+    public float spotSnapDistance = 2f;
+
     [Header("ATM Response")]
     public float atmResponseRadius = 25f;
     public float investigateSpeed = 4f;
@@ -85,6 +95,21 @@ public class CopAIWithAnimation : MonoBehaviour
     private bool lastSees;
     private float nextStatusLog;
     private string sightInfo = "";
+
+    // spot claims (collision handling)
+    private static readonly Dictionary<Vector3Int, List<CopAIWithAnimation>> spotClaims =
+        new Dictionary<Vector3Int, List<CopAIWithAnimation>>();
+    private Vector3Int claimedKey;
+    private bool hasClaim;
+    private int claimSlot;
+    private int priorityOffset;
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+    private static void ResetStatics()
+    {
+        // keeps claims clean when "Enter Play Mode Options" skips domain reload
+        spotClaims.Clear();
+    }
 
     private bool Wanted => forceWanted || GameData.IsWanted;
 
@@ -172,6 +197,14 @@ public class CopAIWithAnimation : MonoBehaviour
         agent.angularSpeed = turnSpeed;
         agent.acceleration = agentAcceleration;
 
+        // Avoidance: each cop gets a slightly different priority so two cops
+        // meeting head-on don't deadlock (the lower priority one steps aside).
+        if (useAvoidance)
+        {
+            agent.obstacleAvoidanceType = ObstacleAvoidanceType.HighQualityObstacleAvoidance;
+            priorityOffset = Mathf.Abs(GetInstanceID()) % 20;
+        }
+
         // Let the NavMeshAgent control movement, not animation root motion.
         if (anim != null)
             anim.applyRootMotion = false;
@@ -187,6 +220,7 @@ public class CopAIWithAnimation : MonoBehaviour
     private void OnDisable()
     {
         GameData.OnAtmBreached -= HandleAtmBreached;
+        ReleaseSpot();
     }
 
     // Called by CopSpawner after Instantiate.
@@ -324,10 +358,53 @@ public class CopAIWithAnimation : MonoBehaviour
         patrolDirection = 1;
 
         agent.isStopped = false;
-        agent.SetDestination(routes[routeIndex][pointIndex].position);
+        agent.updateRotation = true;
+        SetPatrolDestination();
 
         Log($"-> PATROL (was {previous}): {reason}. " +
             $"Heading to route {routeIndex} point {pointIndex}.");
+    }
+
+    // Used after a chase / ATM investigation: go back to the route point the
+    // cop was heading to when it was interrupted (routeIndex / pointIndex /
+    // patrolDirection are not touched while chasing or investigating), instead
+    // of snapping to whatever point happens to be nearest.
+    private void ResumePatrol(string reason = "")
+    {
+        bool valid = routes != null &&
+                     routeIndex >= 0 && routeIndex < routes.Count &&
+                     routes[routeIndex] != null &&
+                     pointIndex >= 0 && pointIndex < routes[routeIndex].Length;
+
+        if (!valid)
+        {
+            GoToNearestRoutePoint(reason + " (no saved route point)");
+            return;
+        }
+
+        State previous = state;
+
+        state = State.Patrol;
+        waiting = false;
+        waitTimer = 0f;
+        lostTimer = 0f;
+
+        agent.speed = patrolSpeed;
+        agent.isStopped = false;
+        agent.updateRotation = true;   // chase / look-around may have turned it off
+
+        SetPatrolDestination();
+
+        Log($"-> PATROL (was {previous}): {reason}. " +
+            $"Returning to ORIGINAL route {routeIndex} point {pointIndex}.");
+    }
+
+    // Sends the agent to the current route point, using a free "slot" around it
+    // so cops sharing the same point don't stack on top of each other.
+    private void SetPatrolDestination()
+    {
+        Vector3 point = routes[routeIndex][pointIndex].position;
+        agent.SetDestination(useAvoidance ? ClaimSpot(point) : point);
     }
 
     // ---------- Main loop ----------
@@ -339,6 +416,7 @@ public class CopAIWithAnimation : MonoBehaviour
 
         agent.isStopped = GameData.GamePause;
 
+        UpdateAvoidancePriority();
         UpdateAnimation();
 
         // no braking while rolling through waypoints, braking everywhere else (chase / ATM)
@@ -459,7 +537,7 @@ public class CopAIWithAnimation : MonoBehaviour
         }
 
         agent.isStopped = false;
-        agent.SetDestination(pts[pointIndex].position);
+        SetPatrolDestination();
     }
 
     // ---------- Investigate ATM ----------
@@ -512,7 +590,7 @@ public class CopAIWithAnimation : MonoBehaviour
         investigatePos = hit.position;
 
         agent.isStopped = false;
-        agent.SetDestination(investigatePos);
+        agent.SetDestination(useAvoidance ? ClaimSpot(investigatePos) : investigatePos);
     }
 
     private void UpdateInvestigate(bool sees)
@@ -561,7 +639,7 @@ public class CopAIWithAnimation : MonoBehaviour
             if (Wanted)
                 StartChase(false, "finished investigating but still wanted");
             else
-                GoToNearestRoutePoint("finished investigating the ATM");
+                ResumePatrol("finished investigating the ATM");
         }
     }
 
@@ -574,6 +652,9 @@ public class CopAIWithAnimation : MonoBehaviour
         state = State.Chase;
         waiting = false;
         lostTimer = 0f;
+
+        // a chasing cop no longer occupies a patrol / ATM spot
+        ReleaseSpot();
 
         // Restore automatic rotation when starting a chase.
         agent.updateRotation = true;
@@ -594,7 +675,7 @@ public class CopAIWithAnimation : MonoBehaviour
     {
         if (!Wanted)
         {
-            GoToNearestRoutePoint("wanted timer ran out");
+            ResumePatrol("wanted timer ran out");
             return;
         }
 
@@ -647,6 +728,101 @@ public class CopAIWithAnimation : MonoBehaviour
 
             onCaughtPlayer?.Invoke();
         }
+    }
+
+    // ---------- Collision handling ----------
+
+    // Chasing cops get a higher priority (lower number) so patrolling cops
+    // step out of their way.
+    private void UpdateAvoidancePriority()
+    {
+        if (!useAvoidance)
+            return;
+
+        int p = basePriority + priorityOffset;
+
+        if (state != State.Patrol)
+            p -= 25;
+
+        agent.avoidancePriority = Mathf.Clamp(p, 0, 99);
+    }
+
+    // Registers this cop as heading to 'spot' and returns the position it
+    // should actually walk to. The first cop gets the exact spot, the next ones
+    // get free slots on rings around it, so two cops never aim at the same point.
+    private Vector3 ClaimSpot(Vector3 spot)
+    {
+        ReleaseSpot();
+
+        Vector3Int key = Vector3Int.RoundToInt(spot);
+
+        if (!spotClaims.TryGetValue(key, out List<CopAIWithAnimation> list))
+        {
+            list = new List<CopAIWithAnimation>();
+            spotClaims[key] = list;
+        }
+
+        int slot = 0;
+        while (IsSlotTaken(list, slot))
+            slot++;
+
+        list.Add(this);
+        claimedKey = key;
+        claimSlot = slot;
+        hasClaim = true;
+
+        if (slot == 0)
+            return spot;
+
+        Vector3 offset = SlotOffset(slot);
+
+        if (NavMesh.SamplePosition(spot + offset, out NavMeshHit hit,
+                spotSnapDistance, NavMesh.AllAreas))
+        {
+            Log($"Spot {key} is taken -> using slot {slot} next to it.");
+            return hit.position;
+        }
+
+        return spot;
+    }
+
+    private void ReleaseSpot()
+    {
+        if (!hasClaim)
+            return;
+
+        if (spotClaims.TryGetValue(claimedKey, out List<CopAIWithAnimation> list))
+        {
+            list.Remove(this);
+
+            if (list.Count == 0)
+                spotClaims.Remove(claimedKey);
+        }
+
+        hasClaim = false;
+    }
+
+    private static bool IsSlotTaken(List<CopAIWithAnimation> list, int slot)
+    {
+        for (int i = 0; i < list.Count; i++)
+        {
+            if (list[i].claimSlot == slot)
+                return true;
+        }
+
+        return false;
+    }
+
+    // slot 1-6 = first ring, 7-12 = second ring, ...
+    private Vector3 SlotOffset(int slot)
+    {
+        int ring = (slot - 1) / 6 + 1;
+        int index = (slot - 1) % 6;
+
+        float angle = (index * 60f + ring * 30f) * Mathf.Deg2Rad;
+        float radius = ring * spotSlotSpacing;
+
+        return new Vector3(Mathf.Cos(angle), 0f, Mathf.Sin(angle)) * radius;
     }
 
     // ---------- Player catch detection ----------
