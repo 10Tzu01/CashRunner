@@ -4,7 +4,7 @@ using UnityEngine.InputSystem;
 using UnityEngine.UI;
 using TMPro;
 
-public class NewMonoBehaviourScript : MonoBehaviour
+public class AtmSystem : MonoBehaviour
 {
     [Header("References")]
     public GameObject cashPrefab;
