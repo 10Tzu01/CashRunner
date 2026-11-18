@@ -11,25 +11,26 @@ public static class GameData
     public static bool isRobbing = false;
 
     public static int atmsBroken = 0;
+    public static int currentDay = 1;          // used by DayManager
 
-   
+
     public static int maxLives = 3;
     public static int playerLives = 3;
 
-    
+
     public static event Action<Vector3> OnAtmBreached;
     public static void RaiseAtmBreached(Vector3 atmPosition) => OnAtmBreached?.Invoke(atmPosition);
 
-   
-    public static float wantedDuration = 20f;       
+
+    public static float wantedDuration = 20f;
     public static float wantedTimeLeft = 0f;
-    public static bool playerSpotted = false;       
+    public static bool playerSpotted = false;
     public static bool hasLastKnown = false;
-    public static Vector3 lastKnownPlayerPos;       
+    public static Vector3 lastKnownPlayerPos;
 
     public static bool IsWanted => isRobbing || wantedTimeLeft > 0f;
     public static float WantedTimeLeft => isRobbing ? wantedDuration : wantedTimeLeft;
-    public static float Wanted01 => wantedDuration <= 0f ? 0f : Mathf.Clamp01(WantedTimeLeft / wantedDuration);  
+    public static float Wanted01 => wantedDuration <= 0f ? 0f : Mathf.Clamp01(WantedTimeLeft / wantedDuration);
 
     private static int lastTickFrame = -1;
 
@@ -38,7 +39,7 @@ public static class GameData
         wantedTimeLeft = wantedDuration;
     }
 
-   
+
     public static void ReportSighting(Vector3 playerPos)
     {
         lastKnownPlayerPos = playerPos;
@@ -74,6 +75,7 @@ public static class GameData
         playerScore = 0;
         playerName = "Player 1";
         atmsBroken = 0;
+        currentDay = 1;
         playerLives = maxLives;
         wantedTimeLeft = 0f;
         playerSpotted = false;
